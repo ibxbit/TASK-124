@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: merchant_app
+      POSTGRES_PASSWORD: merchant_app
+      POSTGRES_DB: merchant_console
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U merchant_app -d merchant_console"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "3131:3131"
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: merchant_app
+      PGPASSWORD: merchant_app
+      PGDATABASE: merchant_console
+      API_HOST: "0.0.0.0"
+      API_PORT: "3131"
+      JWT_SECRET: "docker-compose-change-me-in-production-32chars"
+      MERCHANT_DB_KEY: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

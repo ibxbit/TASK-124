@@ -1,0 +1,31 @@
+{
+  "name": "merchant-console",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Merchant Engagement & Settlement Analytics Console",
+  "main": "electron/src/main.js",
+  "workspaces": [
+    "backend",
+    "electron",
+    "frontend"
+  ],
+  "scripts": {
+    "migrate": "npm --workspace backend run migrate",
+    "dev:backend": "npm --workspace backend run dev",
+    "dev:frontend": "npm --workspace frontend run dev",
+    "dev:electron": "npm --workspace electron run dev",
+    "build:frontend": "npm --workspace frontend run build",
+    "build": "npm run build:frontend && electron-builder build --win --x64",
+    "start": "electron .",
+    "pack": "electron-builder --dir"
+  },
+  "build": {
+    "extends": "./electron-builder.yml"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^30.0.2",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^7.2.0"
+  }
+}

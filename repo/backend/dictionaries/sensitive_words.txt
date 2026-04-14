@@ -1,0 +1,6 @@
+badword1
+badword2
+profanity1
+profanity2
+slur1
+slur2

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+out/
+*.log
+.env
+.DS_Store
+pgdata/
+uploads/
+exports/
+checkpoints/
+updates/
+.claude/

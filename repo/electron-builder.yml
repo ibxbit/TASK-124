@@ -1,0 +1,58 @@
+appId: com.eaglepoint.mesac
+productName: MESAC
+copyright: "Copyright © 2026 EaglePoint"
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - electron/**/*
+  - backend/**/*
+  - frontend/dist/**/*
+  - node_modules/**/*
+  - "!node_modules/.cache"
+  - "!**/*.map"
+
+extraResources:
+  - from: database
+    to: database
+  - from: backend/dictionaries
+    to: dictionaries
+
+win:
+  target:
+    - target: msi
+      arch: [x64]
+    - target: nsis
+      arch: [x64]
+  # Signing: set CSC_LINK + CSC_KEY_PASSWORD env vars at CI time
+  signingHashAlgorithms: [sha256]
+  certificateSubjectName: "EaglePoint Analytics LLC"
+  requestedExecutionLevel: asInvoker
+  icon: build/icons/icon.ico
+
+msi:
+  oneClick: false
+  perMachine: true
+  runAfterFinish: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: MESAC Console
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+
+publish:
+  provider: generic
+  url: "https://updates.eaglepoint.com/mesac/win"
+
+# Memory budget for renderer processes (512 MB each)
+extraMetadata:
+  electronFlags:
+    - "--max-old-space-size=512"
+
+asar: true
+compression: maximum

@@ -1,0 +1,9 @@
+{
+    "prompt": "Implement a Merchant Engagement & Settlement Analytics Console for offline-first marketplace operations and internal auditing. The desktop app targets Windows 11 (1920x1080 minimum with high-DPI scaling) and is packaged as a signed .msi installer. Roles include Administrator, Analyst, Moderator, and Finance Operator. The UI is built as an Electron desktop shell with a Svelte-based dashboard and multi-window workflow. Core capabilities include a local visualization and query service (Fastify REST APIs), advanced analytics, moderation, engagement features, and offline-first data persistence in PostgreSQL.",
+    "project_type": "desktop-analytics-console",
+    "frontend_language": "javascript",
+    "backend_language": "javascript",
+    "frontend_framework": "svelte",
+    "backend_framework": "fastify",
+    "database": "postgresql"
+}

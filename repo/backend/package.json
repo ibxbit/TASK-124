@@ -1,0 +1,28 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node src/db/migrate.js",
+    "test": "node --test test/queryBuilder.test.js test/stats.test.js test/bucketing.test.js test/reviewValidation.test.js test/rbac.test.js test/finance.test.js test/exportValidation.test.js test/exportService.test.js test/exportRowLimit.test.js test/checkpointIntegrity.test.js test/memoryService.test.js test/startupTimer.test.js test/spamService.test.js test/encryption.test.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@fastify/jwt": "^8.0.1",
+    "@fastify/multipart": "^8.3.0",
+    "@fastify/sensible": "^5.6.0",
+    "adm-zip": "^0.5.14",
+    "bcryptjs": "^2.4.3",
+    "exceljs": "^4.4.0",
+    "fastify": "^4.28.1",
+    "fastify-plugin": "^4.5.1",
+    "pg": "^8.12.0",
+    "uuid": "^9.0.1"
+  },
+  "optionalDependencies": {
+    "embedded-postgres": "^18.2.0-beta.16"
+  }
+}
