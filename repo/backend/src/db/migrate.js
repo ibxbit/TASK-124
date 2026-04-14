@@ -49,14 +49,19 @@ async function ensureBaselineVersion(db) {
 
 async function syncToSchemaMigrations(db, file, upSql, downSql) {
   // If the versioning system exists, register this migration there too.
+  // Use a SAVEPOINT so that a failed query (e.g. app_versions not yet created)
+  // does not abort the surrounding transaction.
   try {
+    await db.query('SAVEPOINT sync_schema');
     const versionId = await ensureBaselineVersion(db);
     await db.query(`
       INSERT INTO schema_migrations (version_id, name, up_sql, down_sql, applied_at)
       VALUES ($1, $2, $3, $4, NOW())
       ON CONFLICT (version_id, name) DO NOTHING
     `, [versionId, file, upSql, downSql || '-- no down sql provided']);
+    await db.query('RELEASE SAVEPOINT sync_schema');
   } catch (err) {
+    await db.query('ROLLBACK TO SAVEPOINT sync_schema');
     // Versioning table might not exist yet if 009 hasn't run.
     if (!err.message.includes('relation "app_versions" does not exist')) {
       throw err;
