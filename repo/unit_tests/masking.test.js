@@ -3,7 +3,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { maskLast4, formatLast4, maskCardToken } = require('../frontend/src/lib/mask.js');
+let maskLast4, formatLast4, maskCardToken;
+
+test('load mask module', async () => {
+  const mod = await import('../frontend/src/lib/mask.js');
+  maskLast4 = mod.maskLast4;
+  formatLast4 = mod.formatLast4;
+  maskCardToken = mod.maskCardToken;
+});
 
 test('maskLast4 masks all but last 4 characters', () => {
   assert.equal(maskLast4('1234567890'), '••••••7890');
