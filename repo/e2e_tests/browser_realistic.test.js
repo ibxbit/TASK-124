@@ -67,6 +67,34 @@ async function serveFrontend() {
   return srv;
 }
 
+async function isBackendLive() {
+  // Probe /health on the expected backend port; if something is already
+  // serving it, we reuse it rather than racing to bind the same port.
+  return new Promise(resolve => {
+    const req = http.get({ host: '127.0.0.1', port: BACKEND_PORT, path: '/health', timeout: 800 },
+      res => { res.resume(); resolve(res.statusCode === 200); });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+async function ensureAdminSeedOnExternalBackend() {
+  // When we reuse an externally-running backend, we can't run ensureDefaultAdmin
+  // ourselves. Instead confirm that admin/admin actually logs in — otherwise
+  // skip the test with a clear message so we don't debug ghost auth failures.
+  const body = JSON.stringify({ username: 'admin', password: 'admin' });
+  return new Promise(resolve => {
+    const req = http.request({
+      host: '127.0.0.1', port: BACKEND_PORT, path: '/auth/login', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 2000
+    }, res => { res.resume(); resolve(res.statusCode === 200); });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end(body);
+  });
+}
+
 async function startBackend() {
   // Isolate env so the real backend boots on a deterministic port with the
   // test DB credentials, independent of whatever other tests did.
@@ -110,17 +138,27 @@ test.before(async () => {
     return;
   }
 
-  try {
-    backendApp = await startBackend();
-  } catch (e) {
-    // If port 3131 is already in use (e.g. another docker stack), skip rather
-    // than fail — the bundled frontend has the URL baked in at build time.
-    if (/EADDRINUSE/.test(e.message)) {
-      skipReason = `port ${BACKEND_PORT} already in use — close other stacks and retry`;
-    } else {
-      skipReason = `backend start failed: ${e.message}`;
+  // Prefer an already-running backend (e.g. docker compose stack) over
+  // spawning our own — spinning up a second Fastify on the same port races
+  // with the docker-forwarded listener on Windows and causes flaky 401s.
+  const live = await isBackendLive();
+  if (live) {
+    if (!(await ensureAdminSeedOnExternalBackend())) {
+      skipReason = `backend on :${BACKEND_PORT} does not accept admin/admin — run fresh docker compose up so demo users seed`;
+      return;
     }
-    return;
+    // Leave backendApp null; we're reusing the external one.
+  } else {
+    try {
+      backendApp = await startBackend();
+    } catch (e) {
+      if (/EADDRINUSE/.test(e.message)) {
+        skipReason = `port ${BACKEND_PORT} occupied by non-responding process — close it and retry`;
+      } else {
+        skipReason = `backend start failed: ${e.message}`;
+      }
+      return;
+    }
   }
 
   try {

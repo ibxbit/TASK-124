@@ -24,9 +24,9 @@ function getBcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
 async function ensureDefaultAdmin() {
   const db = getDb();
   // One demo user per role so reviewers can exercise every RBAC path after
-  // `docker-compose up`. Only seeded on first boot (users table empty).
-  const { rows } = await db.query(`SELECT 1 FROM users LIMIT 1`);
-  if (rows.length) return;
+  // `docker-compose up`. Each row is upserted independently (ON CONFLICT
+  // DO NOTHING) so a partially-seeded volume (e.g. only 'admin' present from
+  // an older build) still converges to the complete set on next boot.
   const bcrypt = getBcrypt();
   const seeds = [
     ['admin',     'admin',         'admin'],
@@ -34,13 +34,18 @@ async function ensureDefaultAdmin() {
     ['moderator', 'moderator123',  'moderator'],
     ['finance',   'finance123',    'finance']
   ];
+  let created = 0;
   for (const [username, password, role] of seeds) {
     const hash = await bcrypt.hash(password, 10);
-    await db.query(
+    const r = await db.query(
       `INSERT INTO users (username, password_hash, role) VALUES ($1,$2,$3)
-       ON CONFLICT (username) DO NOTHING`, [username, hash, role]);
+       ON CONFLICT (username) DO NOTHING
+       RETURNING id`, [username, hash, role]);
+    if (r.rows.length) created++;
   }
-  console.log('[bootstrap] default users (admin/analyst/moderator/finance) created');
+  if (created > 0) {
+    console.log(`[bootstrap] demo users seeded: ${created} of 4 (admin/analyst/moderator/finance)`);
+  }
 }
 
 function validateConfig() {
