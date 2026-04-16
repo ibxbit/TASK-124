@@ -23,13 +23,24 @@ function getBcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
 
 async function ensureDefaultAdmin() {
   const db = getDb();
+  // One demo user per role so reviewers can exercise every RBAC path after
+  // `docker-compose up`. Only seeded on first boot (users table empty).
   const { rows } = await db.query(`SELECT 1 FROM users LIMIT 1`);
   if (rows.length) return;
-  const hash = await getBcrypt().hash('admin', 10);
-  await db.query(
-    `INSERT INTO users (username, password_hash, role) VALUES ($1,$2,'admin')
-     ON CONFLICT (username) DO NOTHING`, ['admin', hash]);
-  console.log('[bootstrap] default admin/admin user created');
+  const bcrypt = getBcrypt();
+  const seeds = [
+    ['admin',     'admin',         'admin'],
+    ['analyst',   'analyst123',    'analyst'],
+    ['moderator', 'moderator123',  'moderator'],
+    ['finance',   'finance123',    'finance']
+  ];
+  for (const [username, password, role] of seeds) {
+    const hash = await bcrypt.hash(password, 10);
+    await db.query(
+      `INSERT INTO users (username, password_hash, role) VALUES ($1,$2,$3)
+       ON CONFLICT (username) DO NOTHING`, [username, hash, role]);
+  }
+  console.log('[bootstrap] default users (admin/analyst/moderator/finance) created');
 }
 
 function validateConfig() {

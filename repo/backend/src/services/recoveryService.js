@@ -30,12 +30,18 @@ const experimentCache = { activeVersions: [], loadedAt: null };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-async function withAdvisoryLock(fn) {
+async function withAdvisoryLock(fn, { waitMs = 3000, retryEveryMs = 100 } = {}) {
   const db = getDb();
   const client = await db.connect();
   try {
-    const res = await client.query(`SELECT pg_try_advisory_lock($1) AS got`, [ADVISORY_LOCK_KEY]);
-    if (!res.rows[0].got) {
+    const deadline = Date.now() + waitMs;
+    let got = false;
+    while (Date.now() <= deadline) {
+      const res = await client.query(`SELECT pg_try_advisory_lock($1) AS got`, [ADVISORY_LOCK_KEY]);
+      if (res.rows[0].got) { got = true; break; }
+      await new Promise(r => setTimeout(r, retryEveryMs));
+    }
+    if (!got) {
       const e = new Error('Recovery already in progress (advisory lock held)');
       e.status = 423; throw e;
     }

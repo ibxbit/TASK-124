@@ -183,4 +183,4 @@ async function currentVersion() {
   return rows[0] || null;
 }
 
-module.exports = { importPackage, applyVersion, rollbackVersion, listVersions, currentVersion };
+module.exports = { importPackage, applyVersion, rollbackVersion, listVersions, currentVersion, sha256, cmpVersions };

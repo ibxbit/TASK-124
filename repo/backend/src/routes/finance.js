@@ -37,6 +37,13 @@ async function financeRoutes(fastify) {
     async (request, reply) => {
       try {
         const { couponCode, ...p } = request.body || {};
+        // Reject user-supplied payloads missing required fields with 400
+        // rather than letting the NOT NULL DB constraint surface as 500.
+        const missing = ['externalId','provider','merchantId','orderId','state','grossAmount','occurredAt']
+          .filter(k => p[k] == null || p[k] === '');
+        if (missing.length) {
+          return reply.code(400).send({ error: `missing required field(s): ${missing.join(', ')}` });
+        }
         const r = await paymentSvc.createPayment(p, { couponCode });
         if (!r) return reply.code(409).send({ error: 'Duplicate external_id' });
         return r;

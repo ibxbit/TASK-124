@@ -1,5 +1,7 @@
 # Merchant Engagement & Settlement Analytics Console
 
+**Project type: `fullstack`** (Electron desktop + Svelte frontend + Fastify backend + PostgreSQL)
+
 Desktop-class analytics platform for merchant moderation, A/B experimentation,
 and financial settlement — designed for offline-first Windows 11 deployment.
 
@@ -8,26 +10,34 @@ and financial settlement — designed for offline-first Windows 11 deployment.
 ## Start Command
 
 ```bash
-docker compose up
+docker-compose up
 ```
 
-No `.env` edits, no manual SQL imports. Everything is orchestrated automatically.
+No `.env` edits, no manual SQL imports, no `npm install` steps. Everything is
+orchestrated automatically by Docker Compose. (The modern `docker compose up`
+subcommand works interchangeably.)
 
 ---
 
 ## Services & Addresses
 
-| Service        | Address                  | Port |
-|----------------|--------------------------|------|
-| **Frontend**   | http://localhost:3000     | 3000 |
-| **Backend API**| http://localhost:3131     | 3131 |
-| **PostgreSQL** | localhost                | 5432 |
+| Service        | URL                         | Port |
+|----------------|-----------------------------|------|
+| **Frontend**   | http://localhost:3000       | 3000 |
+| **Backend API**| http://localhost:3131       | 3131 |
+| **PostgreSQL** | postgresql://localhost:5432 | 5432 |
 
-### Default Login
+### Demo Credentials (all roles)
 
-| Username | Password | Role  |
-|----------|----------|-------|
-| admin    | admin    | admin |
+Every role ships pre-seeded by the migration runner so reviewers can log in to
+each persona immediately after `docker-compose up`:
+
+| Email / Username | Password      | Role      |
+|------------------|---------------|-----------|
+| `admin`          | `admin`       | admin     |
+| `analyst`        | `analyst123`  | analyst   |
+| `moderator`      | `moderator123`| moderator |
+| `finance`        | `finance123`  | finance   |
 
 Additional users can be created via `POST /auth/register` (admin-only).
 
@@ -98,25 +108,25 @@ repo/
 
 ## Running Tests
 
-```bash
-./run_tests.sh
-```
-
-The script is **idempotent** — safe to run repeatedly with no manual setup.
-
-It:
-1. Installs backend dependencies
-2. Runs **195 unit tests** (pure logic, no DB)
-3. Waits for Postgres, runs migrations
-4. Runs **~45 API integration tests** against a live Fastify + Postgres stack
-5. Prints a PASS/FAIL summary
-
-### Running tests against Docker Postgres
+All tests run inside the stack started by `docker-compose up`. A dedicated
+test runner container executes the full 5-tier suite against the real Postgres
+container — unit, frontend, electron, API (HTTP), and E2E.
 
 ```bash
-docker compose up db -d
-TEST_PGHOST=localhost TEST_PGPORT=5432 ./run_tests.sh
+docker-compose --profile test run --rm tests
 ```
+
+That single command runs `run_tests.sh`, which:
+
+1. Runs unit tests (pure logic, no DB)
+2. Runs frontend (Svelte lib + components)
+3. Runs electron (window mgr, IPC, keystore, shortcuts)
+4. Runs API HTTP tests against a live Fastify + Postgres stack
+5. Runs E2E flows
+6. Prints a PASS/FAIL summary
+
+> Every tier runs the same way a reviewer would run it. There is no separate
+> "developer" mode.
 
 ---
 
@@ -125,26 +135,40 @@ TEST_PGHOST=localhost TEST_PGPORT=5432 ./run_tests.sh
 ### 1. Start the system
 
 ```bash
-docker compose up
+docker-compose up
 ```
 
 Wait for `backend  | ready in Nms` in the logs.
 
-### 2. Verify Health
+### 2. Verify backend health with curl
 
 ```bash
 curl http://localhost:3131/health
 # → {"status":"ok","uptime":N,"timestamp":"..."}
 ```
 
-### 3. Authenticate
+### 3. Authenticate (demo credentials)
 
 ```bash
+# admin
 TOKEN=$(curl -s -X POST http://localhost:3131/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}' | jq -r .token)
 
-echo $TOKEN
+# analyst
+A_TOKEN=$(curl -s -X POST http://localhost:3131/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"analyst","password":"analyst123"}' | jq -r .token)
+
+# moderator
+M_TOKEN=$(curl -s -X POST http://localhost:3131/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"moderator","password":"moderator123"}' | jq -r .token)
+
+# finance
+F_TOKEN=$(curl -s -X POST http://localhost:3131/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"finance","password":"finance123"}' | jq -r .token)
 ```
 
 ### 4. Test RBAC enforcement
@@ -153,35 +177,18 @@ echo $TOKEN
 # Admin can list experiments
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:3131/experiments | jq .
 
-# Create an analyst
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  http://localhost:3131/auth/register \
-  -d '{"username":"analyst1","password":"pass","role":"analyst"}'
-
-# Login as analyst
-A_TOKEN=$(curl -s -X POST http://localhost:3131/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"analyst1","password":"pass"}' | jq -r .token)
-
 # Analyst cannot run settlement (403)
 curl -s -X POST -H "Authorization: Bearer $A_TOKEN" \
   http://localhost:3131/settlement/run | jq .error
 # → "Forbidden"
+
+# Moderator can list review appeals
+curl -s -H "Authorization: Bearer $M_TOKEN" http://localhost:3131/appeals | jq .
 ```
 
-### 5. Create a payment + verify ledger
+### 5. Create a payment + verify ledger (as `finance`)
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  http://localhost:3131/auth/register \
-  -d '{"username":"fin1","password":"pass","role":"finance"}'
-
-F_TOKEN=$(curl -s -X POST http://localhost:3131/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"fin1","password":"pass"}' | jq -r .token)
-
 curl -s -X POST -H "Authorization: Bearer $F_TOKEN" \
   -H 'Content-Type: application/json' \
   http://localhost:3131/finance/payments \
@@ -194,10 +201,9 @@ curl -s -X POST -H "Authorization: Bearer $F_TOKEN" \
 
 You should see `payment`, `discount`, and `fees` (service, platform, surcharge, sales_tax, commission at 12.5%).
 
-### 6. Issue + execute a refund
+### 6. Issue + execute a refund (as `finance`)
 
 ```bash
-# Get the payment ID from above, then:
 curl -s -X POST -H "Authorization: Bearer $F_TOKEN" \
   -H 'Content-Type: application/json' \
   http://localhost:3131/refunds/issue \
@@ -216,15 +222,21 @@ curl -s -H "Authorization: Bearer $F_TOKEN" \
 # Default 12.5% + any provider overrides
 ```
 
-### 8. Open the frontend
+### 8. Web UI flow — open the frontend
 
-Navigate to **http://localhost:3000** in a browser. Log in with `admin`/`admin`.
+Navigate to **http://localhost:3000** in a browser. Log in with
+`admin` / `admin` (or any of the other demo credentials above).
 
-### 9. Run full automated test suite
+Verify you can:
+- See the dashboard landing page
+- Open the Queue, Experiment Lab, and Settlement Workbench windows
+- Log out and log back in as a different role to see changed permissions
+
+### 9. Run the full automated test suite
 
 ```bash
-./run_tests.sh
-# All unit + API tests should pass
+docker-compose --profile test run --rm tests
+# All 5 tiers (unit + frontend + electron + API + E2E) should pass.
 ```
 
 ---
@@ -260,98 +272,24 @@ Financial amounts in the Settlement Workbench UI are masked by default (last-4-d
 
 ---
 
-## Non-Docker / Manual Startup
+## Docker-Only Runtime Contract
 
-You can run the backend, frontend, and database without Docker. This is useful for local
-development, debugging, or environments where Docker is not available.
+This project is distributed and run **exclusively via Docker Compose**. There is
+no supported manual-install / `npm install` / local-Postgres workflow — those
+paths are deliberately omitted so the build is reproducible on every reviewer's
+machine.
 
-### Prerequisites
-
-| Dependency   | Version | Purpose                         |
-|--------------|---------|---------------------------------|
-| Node.js      | 20+     | Backend and frontend runtime    |
-| PostgreSQL   | 14+     | Database (if not using embedded)|
-| npm          | 9+      | Package management              |
-
-### 1. Set up PostgreSQL
-
-Either install PostgreSQL locally or use an existing instance. Create the database and user:
-
-```sql
-CREATE USER merchant_app WITH PASSWORD 'merchant_app';
-CREATE DATABASE merchant_console OWNER merchant_app;
-```
-
-Or skip this step entirely — if `PGHOST` is not set, the backend will start an **embedded PostgreSQL**
-instance automatically (desktop/Electron mode).
-
-### 2. Configure environment variables
+The only commands a reviewer needs:
 
 ```bash
-# Required (minimum 16 characters)
-export JWT_SECRET="$(openssl rand -hex 32)"
-
-# Required encryption key for vault (64 hex chars)
-export MERCHANT_DB_KEY="$(openssl rand -hex 32)"
-
-# Postgres connection (defaults shown — omit to use embedded Postgres)
-export PGHOST=localhost
-export PGPORT=5432
-export PGUSER=merchant_app
-export PGPASSWORD=merchant_app
-export PGDATABASE=merchant_console
-
-# Optional
-export API_HOST=0.0.0.0    # default: 0.0.0.0
-export API_PORT=3131        # default: 3131
-export LAN_ONLY=false       # default: false (set true for IP allowlist enforcement)
+docker-compose up                 # start everything
+docker-compose down               # stop everything
+docker-compose up --build         # rebuild after code change
+docker-compose logs -f backend    # tail backend logs
 ```
 
-### 3. Install dependencies and run migrations
-
-```bash
-cd backend && npm install && cd ..
-node backend/src/db/migrate.js
-```
-
-Migrations are idempotent — safe to re-run. Each `.sql` file in `database/` is applied inside
-a transaction and tracked in the `applied_migrations` table.
-
-### 4. Start the backend
-
-```bash
-node backend/src/server.js
-```
-
-The server will log `ready in Nms` when it is accepting requests at `http://localhost:3131`.
-
-### 5. Start the frontend (development)
-
-```bash
-cd frontend && npm install && npm run dev
-```
-
-Opens the Svelte + Vite dev server at `http://localhost:3000`.
-
-### 6. Start the frontend (production build)
-
-```bash
-cd frontend && npm run build
-npx serve dist -l 3000
-```
-
-### 7. Run the full test suite (without Docker)
-
-```bash
-# Ensure Postgres is running and accessible, then:
-./run_tests.sh
-```
-
-Or target only unit tests (no database required):
-
-```bash
-node --test unit_tests/*.test.js
-```
+Everything else — dependency install, migrations, user seeding, log rotation —
+happens inside containers on startup.
 
 ---
 
@@ -379,17 +317,17 @@ See `backend/src/config.js` for the full config module.
 
 ---
 
-## Entry Points
+## Entry Points (Docker-only)
 
-| Mode               | Entry File                      | How to Run                                     |
-|--------------------|---------------------------------|------------------------------------------------|
-| **Docker**         | `docker-compose.yml`            | `docker compose up`                            |
-| **Backend only**   | `backend/src/server.js`         | `node backend/src/server.js`                   |
-| **Frontend dev**   | `frontend/`                     | `cd frontend && npm run dev`                   |
-| **Electron desktop** | `electron/src/main.js`        | `npm start` (from repo root)                   |
-| **Migrations**     | `backend/src/db/migrate.js`     | `node backend/src/db/migrate.js`               |
-| **Test suite**     | `run_tests.sh`                  | `./run_tests.sh`                               |
-| **Unit tests only**| `unit_tests/*.test.js`          | `node --test unit_tests/*.test.js`             |
+| Mode                 | Container / Service     | How to Run                                          |
+|----------------------|-------------------------|-----------------------------------------------------|
+| **Full stack**       | all services            | `docker-compose up`                                 |
+| **Backend only**     | `backend`               | `docker-compose up backend`                         |
+| **Database only**    | `db`                    | `docker-compose up db`                              |
+| **Frontend only**    | `frontend`              | `docker-compose up frontend`                        |
+| **Full test suite**  | `tests`                 | `docker-compose --profile test run --rm tests`      |
+| **Backend shell**    | `backend`               | `docker-compose exec backend sh`                    |
+| **DB shell (psql)**  | `db`                    | `docker-compose exec db psql -U merchant_app merchant_console` |
 
 ---
 
@@ -504,7 +442,7 @@ initial baseline schema.
 **Implication**: Rollback is only supported for versions applied through the update API, not
 for the initial database schema setup.
 
-**Manual verification**: Run `node backend/src/db/migrate.js` and confirm all 16 files apply.
+**Manual verification**: `docker-compose logs backend | grep migration` to confirm all 16 files apply.
 Check that `schema_migrations` is empty (baseline migrations are tracked in `applied_migrations`
 instead). See `backend/src/db/migrate.js:33-50`.
 

@@ -17,7 +17,15 @@
     "build:frontend": "npm --workspace frontend run build",
     "build": "npm run build:frontend && electron-builder build --win --x64",
     "start": "electron .",
-    "pack": "electron-builder --dir"
+    "pack": "electron-builder --dir",
+    "test": "./run_tests.sh",
+    "test:unit": "node --test unit_tests/*.test.js",
+    "test:frontend": "node --test frontend_tests/*.test.js",
+    "test:electron": "node --test electron_tests/*.test.js",
+    "test:api": "node --test API_tests/*.test.js",
+    "test:e2e": "node --test e2e_tests/*.test.js",
+    "test:coverage": "COVERAGE=1 ./run_tests.sh",
+    "test:nodb": "node --test unit_tests/*.test.js frontend_tests/*.test.js electron_tests/*.test.js"
   },
   "build": {
     "extends": "./electron-builder.yml"

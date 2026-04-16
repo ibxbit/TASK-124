@@ -91,4 +91,4 @@ async function evaluateRun(runId) {
   };
 }
 
-module.exports = { evaluateRun };
+module.exports = { evaluateRun, precisionRecall, ndcgAtK, diversity };

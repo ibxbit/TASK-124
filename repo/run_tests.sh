@@ -1,27 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── Merchant Console — Test Runner ──────────────────────────────────────────
-# Runs ALL unit + API tests. Idempotent — safe to re-run any number of times.
+# ─── Merchant Console — Full Test Runner ────────────────────────────────────
+# Runs every tier of the test suite (unit, frontend, electron, API, E2E) and
+# produces a consolidated PASS/FAIL summary. Idempotent — safe to re-run.
 #
-# Prerequisites (auto-handled when run from docker compose):
-#   - Node.js 20+
-#   - PostgreSQL reachable at TEST_PGHOST:TEST_PGPORT (defaults: localhost:5432)
+# Test tiers:
+#   1. unit_tests/        Pure-logic backend tests (no DB)
+#   2. frontend_tests/    Svelte components + lib/*.js (no DB, no network)
+#   3. electron_tests/    Window manager, IPC, keystore, background jobs
+#   4. API_tests/         Integration tests (needs Postgres)
+#   5. e2e_tests/         Full-stack user flows (needs Postgres; auto-skips otherwise)
+#
+# Optional: COVERAGE=1 ./run_tests.sh enables Node's built-in coverage report.
 #
 # Usage:
-#   ./run_tests.sh                         # from repo root
-#   TEST_PGHOST=db TEST_PGPORT=5432 ./run_tests.sh   # inside Docker network
+#   ./run_tests.sh                                       # from repo root
+#   TEST_PGHOST=db TEST_PGPORT=5432 ./run_tests.sh       # inside Docker network
+#   COVERAGE=1 ./run_tests.sh                            # with coverage
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# ─── Dependency install ────────────────────────────────────────────────────
-echo "=== Installing backend dependencies ==="
-cd backend
-npm install --omit=dev 2>/dev/null || npm install
-cd "$SCRIPT_DIR"
+# ─── Dependency preflight (NO install here) ─────────────────────────────────
+# The test runner MUST NOT perform runtime `npm install`. Dependencies are
+# installed during Docker image build (see backend/Dockerfile, frontend/Dockerfile)
+# or, for local invocations, by running `npm install` once before the suite.
+# We just check the tree exists and fail fast with a helpful message otherwise.
+if [ ! -d node_modules ]; then
+  echo "ERROR: node_modules is missing." >&2
+  echo "  Run:  npm ci     (or rebuild the test image: docker-compose build tests)" >&2
+  exit 2
+fi
+if [ ! -d node_modules/fastify ] || [ ! -d node_modules/pg ]; then
+  echo "ERROR: backend runtime deps (fastify, pg) are missing from node_modules." >&2
+  echo "  Run:  npm ci     (the Docker image already does this at build-time)" >&2
+  exit 2
+fi
 
-# ─── Environment for API tests ─────────────────────────────────────────────
+# ─── Environment ────────────────────────────────────────────────────────────
 export PGHOST="${TEST_PGHOST:-localhost}"
 export PGPORT="${TEST_PGPORT:-5432}"
 export PGUSER="${PGUSER:-merchant_app}"
@@ -29,40 +46,78 @@ export PGPASSWORD="${PGPASSWORD:-merchant_app}"
 export PGDATABASE="${PGDATABASE:-merchant_console}"
 export JWT_SECRET="${JWT_SECRET:-test-secret-minimum-16-chars}"
 export MERCHANT_DB_KEY="${MERCHANT_DB_KEY:-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789}"
-export API_PORT=0  # let tests use inject(), no port needed
+export API_PORT=0
 
-UNIT_PASS=0
-UNIT_FAIL=0
-API_PASS=0
-API_FAIL=0
+UNIT_STATUS=skip
+FRONTEND_STATUS=skip
+ELECTRON_STATUS=skip
+API_STATUS=skip
+E2E_STATUS=skip
 
-# ─── Unit tests (pure logic — no DB) ──────────────────────────────────────
-echo ""
-echo "================================================================"
-echo "  UNIT TESTS"
-echo "================================================================"
-
-UNIT_FILES=$(find unit_tests -name '*.test.js' | sort)
-if [ -n "$UNIT_FILES" ]; then
-  if node --test $UNIT_FILES 2>&1 | tee /dev/stderr | tail -5 | grep -q "^# fail 0"; then
-    UNIT_PASS=1
-    echo "  ✓ ALL UNIT TESTS PASSED"
-  else
-    UNIT_FAIL=1
-    echo "  ✗ SOME UNIT TESTS FAILED"
-  fi
-else
-  echo "  (no unit test files found)"
+# Coverage flags
+COV_FLAGS=""
+if [ "${COVERAGE:-0}" = "1" ]; then
+  COV_FLAGS="--experimental-test-coverage --test-coverage-include=backend/src/**/*.js --test-coverage-include=frontend/src/**/*.js --test-coverage-include=electron/src/**/*.js --test-coverage-exclude=node_modules/** --test-coverage-exclude=*.test.js --test-coverage-exclude=**/_*.js --test-coverage-exclude=backend/src/db/embedded.js --test-coverage-exclude=backend/src/server.js"
+  echo "=== COVERAGE mode enabled ==="
 fi
 
-# ─── API tests (integration — needs Postgres) ─────────────────────────────
-echo ""
-echo "================================================================"
-echo "  API TESTS"
-echo "================================================================"
+run_tier () {
+  local name="$1"
+  local glob="$2"
+  echo ""
+  echo "================================================================"
+  echo "  $name"
+  echo "================================================================"
+  # shellcheck disable=SC2086
+  local files
+  files=$(find $glob -name '*.test.js' 2>/dev/null | sort)
+  if [ -z "$files" ]; then
+    echo "  (no test files matched $glob)"
+    return 1
+  fi
+  # shellcheck disable=SC2086
+  # Capture full TAP output so we can search for the summary counters.
+  # Coverage mode appends a report *after* the summary, so we can't rely on
+  # `tail` — instead we look for any line like "# fail N" and confirm N == 0.
+  local out
+  out=$(node --test $COV_FLAGS $files 2>&1 || true)
+  echo "$out"
+  local failCount
+  failCount=$(echo "$out" | grep -E "^# fail [0-9]+" | head -1 | awk '{print $3}')
+  if [ -n "$failCount" ] && [ "$failCount" = "0" ]; then
+    echo "  ✓ $name PASSED"
+    return 0
+  else
+    echo "  ✗ $name FAILED (fail count: ${failCount:-unknown})"
+    return 1
+  fi
+}
 
-# Wait for Postgres to be ready (up to 30s)
-echo "  Waiting for Postgres at $PGHOST:$PGPORT ..."
+# ─── 1. Unit tests (pure logic — no DB) ─────────────────────────────────────
+if run_tier "UNIT TESTS (unit_tests/)" "unit_tests"; then
+  UNIT_STATUS=pass
+else
+  UNIT_STATUS=fail
+fi
+
+# ─── 2. Frontend tests (Svelte components + lib) ────────────────────────────
+if run_tier "FRONTEND TESTS (frontend_tests/)" "frontend_tests"; then
+  FRONTEND_STATUS=pass
+else
+  FRONTEND_STATUS=fail
+fi
+
+# ─── 3. Electron tests (window mgr, IPC, shortcuts, keystore) ───────────────
+if run_tier "ELECTRON TESTS (electron_tests/)" "electron_tests"; then
+  ELECTRON_STATUS=pass
+else
+  ELECTRON_STATUS=fail
+fi
+
+# ─── Wait for Postgres (API + E2E tiers need it) ────────────────────────────
+echo ""
+echo "  Probing Postgres at $PGHOST:$PGPORT ..."
+PG_OK=0
 for i in $(seq 1 30); do
   if node -e "
     const { Pool } = require('pg');
@@ -70,26 +125,31 @@ for i in $(seq 1 30); do
     p.query('SELECT 1').then(() => { p.end(); process.exit(0); }).catch(() => { p.end(); process.exit(1); });
   " 2>/dev/null; then
     echo "  Postgres ready."
+    PG_OK=1
     break
   fi
   sleep 1
 done
 
-# Run migrations before API tests
-echo "  Running migrations ..."
-node backend/src/db/migrate.js 2>&1 || true
+if [ $PG_OK -eq 1 ]; then
+  echo "  Running migrations ..."
+  node backend/src/db/migrate.js 2>&1 || true
 
-API_FILES=$(find API_tests -name '*.test.js' | sort)
-if [ -n "$API_FILES" ]; then
-  if node --test $API_FILES 2>&1 | tee /dev/stderr | tail -5 | grep -q "^# fail 0"; then
-    API_PASS=1
-    echo "  ✓ ALL API TESTS PASSED"
+  # ─── 4. API integration tests ─────────────────────────────────────────────
+  if run_tier "API TESTS (API_tests/)" "API_tests"; then
+    API_STATUS=pass
   else
-    API_FAIL=1
-    echo "  ✗ SOME API TESTS FAILED"
+    API_STATUS=fail
+  fi
+
+  # ─── 5. End-to-end tests (full stack) ─────────────────────────────────────
+  if run_tier "E2E TESTS (e2e_tests/)" "e2e_tests"; then
+    E2E_STATUS=pass
+  else
+    E2E_STATUS=fail
   fi
 else
-  echo "  (no API test files found)"
+  echo "  Postgres not reachable — skipping API + E2E tiers."
 fi
 
 # ─── Summary ───────────────────────────────────────────────────────────────
@@ -97,14 +157,24 @@ echo ""
 echo "================================================================"
 echo "  SUMMARY"
 echo "================================================================"
-echo "  Unit tests:  $([ $UNIT_PASS -eq 1 ] && echo 'PASS' || echo 'FAIL')"
-echo "  API  tests:  $([ $API_PASS -eq 1 ] && echo 'PASS' || echo 'FAIL')"
+printf "  Unit     tests: %s\n" "$UNIT_STATUS"
+printf "  Frontend tests: %s\n" "$FRONTEND_STATUS"
+printf "  Electron tests: %s\n" "$ELECTRON_STATUS"
+printf "  API      tests: %s\n" "$API_STATUS"
+printf "  E2E      tests: %s\n" "$E2E_STATUS"
 echo "================================================================"
 
-if [ $UNIT_FAIL -ne 0 ] || [ $API_FAIL -ne 0 ]; then
+FAIL_COUNT=0
+for s in "$UNIT_STATUS" "$FRONTEND_STATUS" "$ELECTRON_STATUS" "$API_STATUS" "$E2E_STATUS"; do
+  if [ "$s" = "fail" ]; then FAIL_COUNT=$((FAIL_COUNT + 1)); fi
+done
+
+if [ $FAIL_COUNT -ne 0 ]; then
+  echo ""
+  echo "$FAIL_COUNT tier(s) FAILED."
   exit 1
 fi
 
 echo ""
-echo "All tests passed."
+echo "All test tiers passed (or were skipped cleanly)."
 exit 0

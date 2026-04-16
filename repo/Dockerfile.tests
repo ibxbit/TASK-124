@@ -1,0 +1,48 @@
+# Test-runner image.
+#
+# Design goal: `docker-compose --profile test run --rm tests` must NOT perform
+# runtime npm install. Everything required to run the full 5-tier suite is
+# baked into the image at build time:
+#
+#   • npm workspaces deps (backend, frontend, electron)
+#   • Playwright + bundled Chromium (used by e2e_tests/browser_realistic.test.js)
+#   • Built frontend bundle (so E2E can serve dist/ directly)
+#
+# The container then just executes `./run_tests.sh`.
+
+FROM mcr.microsoft.com/playwright:v1.47.2-jammy
+
+WORKDIR /app
+
+# --- 1. Install workspace deps (cached layer) ----------------------------------
+# Copy only manifests first so a code-only change doesn't invalidate the
+# npm-install layer.
+COPY package.json package-lock.json* ./
+COPY backend/package.json    ./backend/
+COPY frontend/package.json   ./frontend/
+COPY electron/package.json   ./electron/
+
+# `npm ci` uses package-lock.json when present; `--ignore-scripts` blocks the
+# electron binary download (not needed for tests — electron_tests/_electron-mock.js
+# stubs the native module).
+RUN npm ci --ignore-scripts --no-audit --no-fund 2>/dev/null \
+ || npm install --ignore-scripts --no-audit --no-fund
+
+# Playwright deps: the base image already has Chromium system libs. The
+# playwright npm package was installed by npm ci above. Install the browsers
+# binary into the image so the E2E test never has to download at runtime.
+RUN npx -y playwright install chromium
+
+# --- 2. Copy source + build frontend --------------------------------------------
+COPY . .
+
+# Build the frontend bundle so browser_realistic.test.js can serve dist/.
+RUN cd frontend && npx vite build
+
+ENV CI=1 \
+    NODE_ENV=test \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    API_PORT=0
+
+# Runs the full 5-tier suite against whatever DB the compose stack provides.
+CMD ["bash", "./run_tests.sh"]

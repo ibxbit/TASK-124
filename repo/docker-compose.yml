@@ -44,5 +44,26 @@ services:
     depends_on:
       - backend
 
+  # One-shot test runner — exercises every tier (unit, frontend, electron,
+  # API, E2E) with `docker-compose --profile test run --rm tests`. Exits 0 on
+  # green. Dependencies and browsers are baked into the image at build time
+  # (see Dockerfile.tests); the container NEVER runs `npm install` at runtime.
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.tests
+    environment:
+      TEST_PGHOST: db
+      TEST_PGPORT: "5432"
+      PGUSER: merchant_app
+      PGPASSWORD: merchant_app
+      PGDATABASE: merchant_console
+      JWT_SECRET: "docker-test-secret-minimum-16-chars"
+      MERCHANT_DB_KEY: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["test"]
+
 volumes:
   pgdata:
