@@ -37,6 +37,19 @@ function resolveTmpBase() {
 }
 const TMP_BASE = resolveTmpBase();
 
+// Any .js files we copy into TMP_BASE use ESM syntax (`export`/`import`).
+// Node decides CJS vs ESM per-file by walking up for the nearest package.json
+// with a `type` field. The repo-root package.json has no `type`, so without a
+// marker here Node treats our copied .js as CJS → "Named export 'login' not
+// found" at dynamic-import time. Drop a minimal package.json once at TMP_BASE
+// so every file inside the subtree is interpreted as ESM.
+try {
+  const pkgMarker = path.join(TMP_BASE, 'package.json');
+  if (!fs.existsSync(pkgMarker)) {
+    fs.writeFileSync(pkgMarker, '{"type":"module"}');
+  }
+} catch { /* non-fatal — tests will still try and surface a clearer error */ }
+
 function patchEnv(code) {
   return code.replace(/import\.meta\.env\.VITE_API_URL/g, '(globalThis.__TEST_API_URL)');
 }

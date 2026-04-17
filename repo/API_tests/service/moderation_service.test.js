@@ -10,22 +10,40 @@ const { getApp, getToken, authHeader, closeApp, getDb } = require('../helpers');
 test.after(closeApp);
 
 async function createReviewForModeration() {
-  await getApp();
-  const db = getDb();
-  const oliId = `OLI-DEEP-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const ordId = `ORD-DEEP-${Date.now()}`;
-  await db.query(
-    `INSERT INTO order_line_items (id, order_id, sku, quantity) VALUES ($1,$2,$3,$4)`,
-    [oliId, ordId, 'WIDGET', 1]);
-  const app = await getApp();
-  const token = await getToken(app, 'moderator');
-  const res = await app.inject({
-    method: 'POST', url: '/reviews',
-    headers: authHeader(token),
-    payload: { orderLineItemId: oliId, orderId: ordId, rating: 3, body: 'meh', tags: [], deviceId: 'dev1' }
-  });
-  const body = JSON.parse(res.payload);
-  return (body.review || body).id;
+  // Retry once on transient failures — under heavy load (the full 354-test API
+  // tier running before this file) the moderator token or POST /reviews
+  // occasionally sees a connection reset. Throwing a descriptive error beats
+  // `undefined.id` down the line.
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const db = getDb();
+    const oliId = `OLI-DEEP-${Date.now()}-${Math.random().toString(36).slice(2)}-${attempt}`;
+    const ordId = `ORD-DEEP-${Date.now()}-${attempt}`;
+    try {
+      await db.query(
+        `INSERT INTO order_line_items (id, order_id, sku, quantity) VALUES ($1,$2,$3,$4)`,
+        [oliId, ordId, 'WIDGET', 1]);
+      const app = await getApp();
+      const token = await getToken(app, 'moderator');
+      const res = await app.inject({
+        method: 'POST', url: '/reviews',
+        headers: authHeader(token),
+        payload: { orderLineItemId: oliId, orderId: ordId, rating: 3, body: 'meh', tags: [], deviceId: 'dev1' }
+      });
+      if (res.statusCode === 200) {
+        const body = JSON.parse(res.payload);
+        const id = (body.review || body).id;
+        if (id) return id;
+        lastErr = new Error(`review-create returned 200 but no id — body=${res.payload}`);
+      } else {
+        lastErr = new Error(`review-create returned ${res.statusCode} — body=${res.payload}`);
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  throw lastErr || new Error('createReviewForModeration failed without a specific error');
 }
 
 test('moderationService: hide → restore → decision log round-trip', async () => {
