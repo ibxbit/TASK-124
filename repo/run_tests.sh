@@ -128,21 +128,44 @@ else
 fi
 
 # ─── Wait for Postgres (API + E2E tiers need it) ────────────────────────────
-echo ""
-echo "  Probing Postgres at $PGHOST:$PGPORT ..."
-PG_OK=0
-for i in $(seq 1 30); do
-  if node -e "
+probe_pg () {
+  # Quick probe — returns 0 if SELECT 1 succeeds, 1 otherwise.
+  node -e "
     const { Pool } = require('pg');
     const p = new Pool({ host:'$PGHOST', port:$PGPORT, user:'$PGUSER', password:'$PGPASSWORD', database:'$PGDATABASE' });
     p.query('SELECT 1').then(() => { p.end(); process.exit(0); }).catch(() => { p.end(); process.exit(1); });
-  " 2>/dev/null; then
-    echo "  Postgres ready."
-    PG_OK=1
-    break
+  " 2>/dev/null
+}
+
+wait_for_pg () {
+  local attempts=$1
+  for _ in $(seq 1 "$attempts"); do
+    if probe_pg; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+echo ""
+echo "  Probing Postgres at $PGHOST:$PGPORT ..."
+PG_OK=0
+if wait_for_pg 5; then
+  echo "  Postgres ready."
+  PG_OK=1
+else
+  # Try to start it ourselves via `docker compose up -d db` so the validator
+  # pipeline (which tears containers down before `run_tests.sh`) still gets
+  # API + E2E coverage instead of skipping them silently.
+  if command -v docker >/dev/null 2>&1 && [ -f docker-compose.yml ]; then
+    echo "  Postgres not reachable — trying 'docker compose up -d db' ..."
+    if docker compose up -d db >/dev/null 2>&1 || docker-compose up -d db >/dev/null 2>&1; then
+      if wait_for_pg 30; then
+        echo "  Postgres ready (started by run_tests.sh)."
+        PG_OK=1
+      fi
+    fi
   fi
-  sleep 1
-done
+fi
 
 if [ $PG_OK -eq 1 ]; then
   echo "  Running migrations ..."

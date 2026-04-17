@@ -8,12 +8,25 @@ const { getDb } = require('./pool');
 const config = require('../config');
 
 async function ensureTable(db) {
-  await db.query(`
+  // Pool connections that sat idle through hundreds of upstream queries can
+  // be reset by the DB side. Retry once on transient connection errors — the
+  // pool hands us a fresh connection on the second attempt.
+  const sql = `
     CREATE TABLE IF NOT EXISTS applied_migrations (
       name       VARCHAR(256) PRIMARY KEY,
       applied_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     )
-  `);
+  `;
+  try {
+    await db.query(sql);
+  } catch (err) {
+    if (err.code === 'ECONNRESET' || /ECONNRESET|terminating connection|connection terminated/.test(err.message || '')) {
+      await new Promise(r => setTimeout(r, 250));
+      await db.query(sql);
+    } else {
+      throw err;
+    }
+  }
 }
 
 async function appliedNames(db) {

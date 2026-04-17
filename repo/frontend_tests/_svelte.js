@@ -18,6 +18,25 @@ const { compile } = require('svelte/compiler');
 
 const ROOT = path.resolve(__dirname, '..', 'frontend', 'src');
 
+// Compiled Svelte files import `svelte/internal`. Node resolves bare specifiers
+// by walking up `node_modules` from the importer's location, so the tmp output
+// directory MUST live under the repo root (where node_modules/svelte exists).
+// Using os.tmpdir() — e.g. `/tmp/` on Linux — breaks because no node_modules is
+// reachable from there. Fall back to os.tmpdir only if the repo-local path is
+// not writable.
+const REPO_ROOT = path.resolve(__dirname, '..');
+function resolveTmpBase() {
+  const preferred = path.join(REPO_ROOT, 'node_modules', '.svelte-test-tmp');
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    fs.accessSync(preferred, fs.constants.W_OK);
+    return preferred;
+  } catch {
+    return os.tmpdir();
+  }
+}
+const TMP_BASE = resolveTmpBase();
+
 function patchEnv(code) {
   return code.replace(/import\.meta\.env\.VITE_API_URL/g, '(globalThis.__TEST_API_URL)');
 }
@@ -65,7 +84,7 @@ function rewriteJsImports(code, baseDir, outDir, jsVisited) {
 
 async function compileComponentTree(svelteFile, opts = {}) {
   const mode = opts.generate || 'ssr';
-  const outDir = opts.outDir || fs.mkdtempSync(path.join(os.tmpdir(), 'svelte-t-'));
+  const outDir = opts.outDir || fs.mkdtempSync(path.join(TMP_BASE, 'svelte-t-'));
   const visited = new Set();
   const jsVisited = new Set();
 
